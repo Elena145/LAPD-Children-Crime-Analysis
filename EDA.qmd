@@ -1,0 +1,659 @@
+---
+title: "EDA for LAPD Crime Data"
+author: "\\small Final Team: Jocelyn Yang, Yiming Xue, Janel Wu, Yichen Wang, Xinyang Wang"
+
+date: "November 15, 2024"
+date-format: long
+format: 
+  pdf:
+    number-sections: true
+    keep-tex: true
+---
+
+#### Quick Cleaning
+```{r}
+data <- read.csv("Crime_Data_from_2020_to_Present_20241112.csv")
+```
+
+
+
+```{r}
+nrow(data)
+```
+
+```{r}
+length(unique(data$Crm.Cd.Desc))
+```
+
+There are 140 types of crimes (categorized by crime code) in total. We decided to focus only on child-related crimes. 
+
+
+
+
+
+
+```{r}
+filtered_data <- data[data$Vict.Age >= 1 & data$Vict.Age <= 12, ]
+```
+
+```{r}
+write.csv(filtered_data, "final_data_CHILD.csv")
+```
+
+
+```{r}
+length(filtered_data$DR_NO)
+```
+
+
+
+```{r}
+nrow(filtered_data)
+length(unique(filtered_data$Crm.Cd.Desc))
+```
+Some of these crime codes primarily indicate children as victims (e.g., 'CHILD ABUSE (PHYSICAL)' or 'LEWD/LASCIVIOUS ACTS WITH CHILD'), while others may be the case where children are the culprits (e.g., 'CHILD STEALING'). 
+
+```{r}
+ncol(filtered_data)
+colnames(filtered_data)
+```
+Check for missing values:
+```{r}
+missing_values <- colSums(is.na(filtered_data))
+cat("Missing values per column:\n")
+print(missing_values)
+```
+There is missingness in Premis.Cd, Weapon.Used.Cd, Crm.Cd.2, Crm.Cd.3, and Crm.Cd.4. Since these are qualitative variables, imputing them requires careful consideration of their categorical nature, which might be far too complex. Moreover, the missingness in Crm.Cd.1, Crm.Cd.2, Crm.Cd.3, and Crm.Cd.4 simply means there's no additional crime type associated with the case. Therefore, in our further analysis, we may only use complete-case method to analyze Premis and Weapon Used.
+
+
+```{r}
+# wordclouds
+library(tm)
+library(wordcloud)
+
+text <- tolower(paste(filtered_data$Crm.Cd.Desc, collapse = " "))
+
+# stopword
+custom_stopwords <- c(stopwords("en"), "simple", "crm", "yrs", "see", "with", "under", "obj", "inc", "susp", "chld", "agnst", "yrs")
+text <- removeWords(text, custom_stopwords)
+
+# remove special characters
+text <- gsub("[^a-z ]", " ", text)
+
+corpus <- Corpus(VectorSource(text))
+
+tdm <- TermDocumentMatrix(corpus)
+matrix <- as.matrix(tdm)
+word_freq <- sort(rowSums(matrix), decreasing = TRUE)
+
+wordcloud(words = names(word_freq), freq = word_freq, min.freq = 2,
+          max.words = 200, random.order = FALSE, colors = brewer.pal(8, "Dark2"))
+
+```
+```{r}
+library(ggplot2)
+library(viridis)
+
+crime_counts <- as.data.frame(table(filtered_data$Crm.Cd.Desc))
+colnames(crime_counts) <- c("CrimeType", "Frequency")
+crime_counts <- crime_counts[order(-crime_counts$Frequency), ]  # Sort in descending order
+top_10_crimes <- head(crime_counts, 10)
+
+# Create the horizontal bar chart with "mako" palette
+ggplot(top_10_crimes, aes(x = reorder(CrimeType, Frequency), y = Frequency, fill = Frequency)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  scale_fill_viridis(option = "mako", direction = -1) +  # Use "mako" for cyan/indigo gradient
+  labs(
+    title = "Top 10 Crime Types by Frequency",
+    x = "Frequency",
+    y = "Crime Type"
+  ) +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5, size = 14)
+  )
+
+
+```
+
+
+
+
+#### EDA for Time
+```{r include-crime-image-1, echo=FALSE, fig.align='center'}
+library(dplyr)
+library(ggplot2)
+library(viridis)
+
+# convert time
+filtered_data <- filtered_data %>%
+  mutate(
+    Date.Occurred = as.Date(DATE.OCC, format = "%m/%d/%Y"),
+    Date.Reported = as.Date(Date.Rptd, format = "%m/%d/%Y")
+  )
+
+
+filtered_data <- filtered_data %>%
+  mutate(
+    Year.Occurred = format(Date.Occurred, "%Y"),
+    Year.Reported = format(Date.Reported, "%Y")
+  )
+
+
+crimes_occurred <- filtered_data %>%
+  count(Year = Year.Occurred) %>%
+  mutate(Type = "Occurred")
+
+
+crimes_reported <- filtered_data %>%
+  count(Year = Year.Reported) %>%
+  mutate(Type = "Reported")
+
+# combine the two datasets
+crimes_by_year <- bind_rows(crimes_occurred, crimes_reported)
+
+
+crimes_by_year$Year <- factor(crimes_by_year$Year, levels = sort(unique(crimes_by_year$Year)))
+
+
+png("crimes_by_year_comparison.png", width = 1200, height = 800, res = 300)
+
+# double bar chart for year
+ggplot(crimes_by_year, aes(x = Year, y = n, fill = Type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +  # Thicker bars
+  scale_fill_viridis(discrete = TRUE, option = "mako") +
+  labs(
+    title = "Year-Wise Comparison of Crimes (Occurred vs Reported)",
+    x = "Year",
+    y = "Number of Crimes",
+    fill = "Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 5),  # Adjusted x-axis labels
+    axis.text.y = element_text(size = 5),  # Adjusted y-axis labels
+    plot.title = element_text(hjust = 0.5, size = 7),  # Adjusted title
+    axis.title = element_text(size = 6),  # Adjusted axis titles
+    legend.title = element_text(size = 5),  # Adjusted legend title
+    legend.text = element_text(size = 4)    # Adjusted legend text
+  )
+
+dev.off()  # Close the PNG device
+
+
+knitr::include_graphics("crimes_by_year_comparison.png")
+
+```
+
+```{r include-crime-image-2, echo=FALSE, fig.align='center'}
+library(dplyr)
+library(ggplot2)
+library(viridis)
+
+# convert time
+filtered_data <- filtered_data %>%
+  mutate(
+    Date.Occurred = as.Date(DATE.OCC, format = "%m/%d/%Y"),
+    Date.Reported = as.Date(Date.Rptd, format = "%m/%d/%Y")
+  )
+
+
+filtered_data <- filtered_data %>%
+  mutate(
+    Month.Occurred = format(Date.Occurred, "%B"),
+    Month.Reported = format(Date.Reported, "%B")
+  )
+
+
+crimes_occurred <- filtered_data %>%
+  count(Month = Month.Occurred) %>%
+  mutate(Type = "Occurred")
+
+
+crimes_reported <- filtered_data %>%
+  count(Month = Month.Reported) %>%
+  mutate(Type = "Reported")
+
+
+crimes_by_month <- bind_rows(crimes_occurred, crimes_reported)
+
+
+month_levels <- month.name
+crimes_by_month$Month <- factor(crimes_by_month$Month, levels = month_levels)
+
+
+png("crimes_by_month_fixed.png", width = 1200, height = 800, res = 300)
+
+# double bar chart for month
+ggplot(crimes_by_month, aes(x = Month, y = n, fill = Type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +  # Thicker bars
+  scale_fill_viridis(discrete = TRUE, option = "mako") +
+  labs(
+    title = "Month-Wise Comparison of Crimes (Occurred vs Reported)",
+    x = "Month",
+    y = "Number of Crimes",
+    fill = "Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),  
+    axis.text.y = element_text(size = 6), 
+    plot.title = element_text(hjust = 0.5, size = 8),  
+    axis.title = element_text(size = 7),  
+    legend.title = element_text(size = 6), 
+    legend.text = element_text(size = 5)  
+  )
+
+dev.off() 
+
+knitr::include_graphics("crimes_by_month_fixed.png")
+```
+
+```{r include-crime-image-3, echo=FALSE, fig.align='center'}
+library(dplyr)
+library(ggplot2)
+library(viridis)
+
+# convert time
+filtered_data <- filtered_data %>%
+  mutate(
+    Date.Occurred = as.Date(DATE.OCC, format = "%m/%d/%Y"),
+    Date.Reported = as.Date(Date.Rptd, format = "%m/%d/%Y")
+  )
+
+# calculate time lag 
+filtered_data <- filtered_data %>%
+  mutate(
+    Lag.Months = as.numeric(difftime(Date.Reported, Date.Occurred, units = "days")) / 30,
+    Month = format(Date.Occurred, "%B"),  # Extract month name
+    Year = format(Date.Occurred, "%Y")   # Extract year
+  )
+
+
+filtered_data <- filtered_data %>%
+  filter(Lag.Months >= 0)
+
+# aggregate data to calculate average lag per month for each year
+lag_trend <- filtered_data %>%
+  group_by(Year, Month) %>%
+  summarise(Average.Lag = mean(Lag.Months, na.rm = TRUE), .groups = "drop")
+
+
+month_levels <- month.name
+lag_trend$Month <- factor(lag_trend$Month, levels = month_levels)
+
+# save the plot
+png("monthly_lag_trend_by_year.png", width = 1200, height = 800, res = 300)
+
+# line plot
+ggplot(lag_trend, aes(x = Month, y = Average.Lag, group = Year, color = Year)) +
+  geom_line(size = 1) +
+  scale_color_viridis_d(option = "mako", name = "Year") +
+  labs(
+    title = "Monthly Trend of Time Lag (Months) for Each Year",
+    x = "Month of Occurrence",
+    y = "Average Time Lag (Months)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 5), 
+    axis.text.y = element_text(size = 5),  
+    plot.title = element_text(size = 7, hjust = 0.5),  
+    axis.title = element_text(size = 6), 
+    legend.title = element_text(size = 5),  
+    legend.text = element_text(size = 4)  
+  )
+
+dev.off()  
+knitr::include_graphics("monthly_lag_trend_by_year.png")
+```
+
+```{r}
+data <- filtered_data
+```
+
+
+
+
+
+
+
+#### EDA for Area
+```{r}
+length(unique(data$AREA.NAME))
+```
+
+
+```{r}
+unique(data$AREA.NAME)
+area_counts <- table(data$AREA.NAME)
+area_counts_df <- as.data.frame(area_counts)
+colnames(area_counts_df) <- c("AREA.NAME", "Count")
+
+# Generate a color gradient based on frequency
+colors <- colorRampPalette(c("lightblue", "blue"))(length(area_counts_df$Count))
+area_counts_df <- area_counts_df[order(area_counts_df$Count, decreasing = TRUE), ]
+
+library(ggplot2)
+
+ggplot(area_counts_df, aes(x = reorder(AREA.NAME, -Count), y = Count)) +
+  geom_bar(stat = "identity", fill = colors) +
+  labs(
+    title = "Number of Cases by Area Name",
+    x = "Area Name",
+    y = "Number of Cases"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8), 
+    plot.title = element_text(hjust = 0.5) 
+  )
+
+```
+```{r}
+library(sf)
+geojson_basemap <- st_read("LAPD_Division.geojson",
+quiet = TRUE)
+
+filtered_data_sf <- filtered_data %>%
+  filter(!is.na(LAT) & !is.na(LON)) %>%  # Ensure LAT and LON are not NA
+  st_as_sf(coords = c("LON", "LAT"), crs = st_crs(geojson_basemap))  # Set the CRS to match the basemap
+
+# plot the map with points
+ggplot() +
+  geom_sf(data = geojson_basemap, fill = "lightgray", color = "black", size = 0.2) +  
+  geom_sf(data = filtered_data_sf, aes(color = "red"), size = 0.5, alpha = 0.7) +   
+  scale_color_manual(values = c("red" = "red"), guide = "none") + 
+  labs(
+    title = "LAPD Division Map with Crime Locations",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),  # Center title
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  )
+```
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(sf)
+library(dplyr)
+
+# Step 1: Load the GeoJSON basemap
+geojson_basemap <- st_read("LAPD_Division.geojson", quiet = TRUE)
+```
+
+```{r}
+geojson_basemap
+```
+
+
+
+
+
+
+
+
+#### EDA for Vict Age
+```{r}
+summary(data$Vict.Age)
+```
+
+Notice that Age = 99 could be an imputation for missing data.
+
+```{r}
+hist(data$Vict.Age, col = "lightblue", main = "Histogram of Victim's Age", xlab = "Age")
+```
+#### EDA for Vict Sex
+```{r}
+table(data$Vict.Sex)
+```
+X is unknown. H could be a wrong data input intended for Vict Descent instead.
+
+#### EDA for Vict Descent
+Descent Code: A - Other Asian B - Black C - Chinese D - Cambodian F - Filipino G - Guamanian H - Hispanic/Latin/Mexican I - American Indian/Alaskan Native J - Japanese K - Korean L - Laotian O - Other P - Pacific Islander S - Samoan U - Hawaiian V - Vietnamese W - White X - Unknown Z - Asian Indian
+
+```{r}
+table(data$Vict.Descent)
+```
+
+
+```{r}
+# Create the frequency table
+vict_descent_table <- table(data$Vict.Descent)
+
+# Create labels with percentages
+labels <- names(vict_descent_table)
+
+# Calculate label positions/ranks
+label_positions <- seq(0.5, 2.5, length.out = length(vict_descent_table))
+
+# Draw the pie chart with adjusted label positions
+pie(
+  vict_descent_table, 
+  labels = labels, 
+  col = topo.colors(length(vict_descent_table)), 
+  main = "Distribution of Victim Descent",
+  cex = 0.8,
+  radius = 1 
+)
+
+
+```
+
+```{r include-crime-image-4, echo=FALSE, fig.align='center'}
+library(ggplot2)
+library(dplyr)
+library(viridis)  # For the Mako palette
+
+filtered_data <- data %>%
+  filter(Vict.Sex != "H")
+
+heatmap_data <- filtered_data %>%
+  filter(!is.na(Vict.Sex) & !is.na(Vict.Descent)) %>%
+  count(Vict.Sex, Vict.Descent) %>%
+  arrange(desc(n))
+
+heatmap_plot <- ggplot(heatmap_data, aes(x = Vict.Sex, y = Vict.Descent, fill = n)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis(option = "mako", direction = -1, name = "Count") +  
+  labs(
+    title = "Heatmap of Victim Sex and Descent",
+    x = "Victim Sex",
+    y = "Victim Descent"
+  ) +
+  coord_fixed(ratio = 0.25) + 
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    panel.grid = element_blank(),
+    plot.margin = unit(c(1, 1, 1, 1), "cm")
+  )
+
+
+ggsave(
+  filename = "heatmap_victim_sex_descent_mako.png",
+  plot = heatmap_plot,
+  width = 6,   
+  height = 8, 
+  dpi = 300,
+  units = "in"
+)
+
+knitr::include_graphics("heatmap_victim_sex_descent_mako.png")
+```
+
+
+#### EDA for Premis
+```{r}
+length(unique(data$Premis.Desc[!is.na(data$Premis.Desc) & data$Premis.Desc != ""]))
+```
+There are 122 types of premis. 
+
+
+
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+
+# Create the frequency table
+premis_counts <- table(data$Premis.Desc)
+premis_df <- as.data.frame(premis_counts)
+colnames(premis_df) <- c("Premis.Desc", "Frequency")
+
+premis_df <- premis_df %>%
+  arrange(desc(Frequency))
+
+# Add a rank column for plotting
+premis_df$Rank <- 1:nrow(premis_df)
+
+# Plot the line chart
+ggplot(premis_df, aes(x = Rank, y = Frequency)) +
+  geom_line(color = "blue") +
+  geom_point(color = "red") +
+  labs(
+    title = "Frequency Distribution of Premises",
+    x = "Rank of Premises (by Frequency)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+```
+It looks like only the top 10 frequent premis type have frequency significantly greater than 0, and there are: 
+
+```{r}
+premis_df[1:10,]
+```
+
+#### EDA for Weapon Used
+```{r}
+length(unique(data$Weapon.Desc[!is.na(data$Weapon.Desc) & data$Weapon.Desc != ""]))
+```
+
+There are 51 types of weapon used.
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+
+weapon_counts <- table(data$Weapon.Desc[data$Weapon.Desc != "" & !is.na(data$Weapon.Desc)])
+weapon_df <- as.data.frame(weapon_counts)
+colnames(weapon_df) <- c("Weapon.Desc", "Frequency")
+
+weapon_df <- weapon_df %>%
+  arrange(desc(Frequency))
+
+weapon_df$Rank <- 1:nrow(weapon_df)
+
+ggplot(weapon_df, aes(x = Rank, y = Frequency)) +
+  geom_line(color = "blue") +
+  geom_point(color = "red") +
+  labs(
+    title = "Frequency Distribution of Weapon",
+    x = "Rank of Weapon Used (by Frequency)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+```{r}
+weapon_df[1:10, ]
+```
+
+
+```{r include-crime-image-0, echo=FALSE, fig.align='center'}
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+
+# function to create and save pie charts using the "Spectral" palette
+create_pie_chart <- function(data, column, title, filename) {
+  # Count occurrences of each unique value
+  top10 <- data %>%
+    filter(!is.na(!!sym(column)) & !!sym(column) != "") %>%  # Remove missing and empty values
+    count(!!sym(column)) %>%
+    arrange(desc(n)) %>%
+    slice_head(n = 10)  # Select the top 10 most frequent values
+
+  # Rename columns for easier plotting
+  colnames(top10) <- c("Category", "Count")
+
+  # Order the Category factor by frequency
+  top10$Category <- factor(top10$Category, levels = top10$Category[order(-top10$Count)])
+
+  # Generate a palette with 10 colors using the "Spectral" palette
+  color_palette <- brewer.pal(10, "Spectral")
+
+  # Plot the pie chart
+  chart <- ggplot(top10, aes(x = "", y = Count, fill = Category)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar(theta = "y") +               # Convert to pie chart
+    scale_fill_manual(values = color_palette) +  # Use the "Spectral" palette
+    labs(
+      title = title,
+      fill = column
+    ) +
+    theme_void() +                           # Simplify theme
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 10)
+    )
+
+  # Save the chart as a PNG file
+  ggsave(filename, chart, width = 8, height = 6, dpi = 300)
+}
+
+create_pie_chart(filtered_data, "Premis.Desc", "Top 10 Premises", "top_10_premises_spectral_palette.png")
+create_pie_chart(filtered_data, "Weapon.Desc", "Top 10 Weapons", "top_10_weapons_spectral_palette.png")
+
+knitr::include_graphics("top_10_premises_spectral_palette.png")
+knitr::include_graphics("top_10_weapons_spectral_palette.png")
+```
+
+
+#### EDA for Status
+```{r}
+table(data$Status.Desc)
+```
+
+### EDA for Location
+```{r}
+summary(data$LAT)
+summary(data$LON)
+```
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+
+data <- data %>% filter(!is.na(LAT) & !is.na(LON) & LAT != 0 & LON != 0)
+
+ggplot(data, aes(x = LON, y = LAT)) +
+  geom_point(color = "blue", alpha = 0.6) +  
+  labs(
+    title = "Geographic Distribution of Data Points",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal()
+
+```
+
+Our next step is to either locate an online map of Los Angeles or utilize the APD_Division.geojson file to overlay these geographical points onto a detailed map.

@@ -1,0 +1,414 @@
+---
+title: "FinalTeam2 HypoTesting"
+author: "Final Team: Jocelyn Yang, Yiming Xue, Janel Wu, Yichen Wang, Xinyang Wang"
+date: "2024-12-01"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+df <- read.csv("final_data_CHILD.csv")
+```
+
+# Hypothesis Testing 
+3 Testable Hypotheses along with models
+For child-involved crimes:
+## Hypothesis 1:
+If long & short time delay in Data Occurred & Date Reported results in significantly different Status (AA, IC, AO). This can be categorized as arrested or not to fit logistic regression
+Test Method: Logistic regression
+
+```{r}
+library(lubridate)
+library(randomForest)
+# convert time
+df$DATE.OCC <- as.POSIXct(df$DATE.OCC, format = "%m/%d/%Y %I:%M:%S %p")
+df$Date.Rptd <- as.POSIXct(df$Date.Rptd, format = "%m/%d/%Y %I:%M:%S %p")
+
+# calculate time delay
+df$delay <- as.numeric(difftime(df$Date.Rptd, df$DATE.OCC, units = "days"))
+df <- df[df$delay >= 0, ]
+
+# categorize into 'short' and 'long' 
+median_delay <- median(df$delay, na.rm = TRUE)
+df$delay_cat <- ifelse(df$delay <= median_delay, "short", "long")
+
+# recode 'Status.Desc' to 'Arrested' or 'Not Arrested'
+df$Arrested <- ifelse(df$Status.Desc %in% c("Adult Arrest", "Juvenile Arrest"), 1, 0)
+df$Arrested <- factor(df$Arrested, levels = c(0, 1), labels = c("Not Arrested", "Arrested"))
+df_hyp1 <- df[!is.na(df$Arrested) & !is.na(df$delay_cat), ]
+
+# fit logistic regression model
+model <- glm(Arrested ~ delay_cat, data = df_hyp1, family = binomial)
+summary(model)
+
+exp(cbind(Odds_Ratio = coef(model), confint(model)))
+```
+
+Results:
+Null Hypothesis (H_0): There is no significant difference in arrest status (arrested or not) between crimes with long and short delays between occurrence and reporting.
+
+Alternative Hypothesis (H_1): There is a significant difference in arrest status between crimes with long and short delays between occurrence and reporting.
+
+Conclusion:
+Because the p-value for the delay category is highly significant (p < 0.001), we reject the null hypothesis (H_0) and accept the alternative hypothesis (H_1), suggesting that crimes reported sooner (short delay) are significantly more likely to result in an arrest compared to those with a longer delay.
+
+The odds of an arrest are approximately 48% higher for crimes with a short reporting delay compared to those with a long delay. Prompt reporting of child-involved crimes enhances the likelihood of apprehending the suspect, highlighting the importance of encouraging immediate reporting to improve justice outcomes.
+
+## Hypothesis 2:
+If different months are associated with different types of weapon used, to investigate if certain months present more violent crimes.
+Test Method: Chi-square.
+
+```{r}
+df_hyp2 <- df[!is.na(df$Weapon.Desc), ]
+df_hyp2$Month <- as.factor(format(as.Date(df_hyp2$DATE.OCC,
+                                          format = "%m/%d/%Y %I:%M:%S %p"), "%b"))
+
+# group months into seasons
+df_hyp2$Season <- factor(ifelse(df_hyp2$Month %in% c("Dec", "Jan", "Feb"), "Winter",
+                         ifelse(df_hyp2$Month %in% c("Mar", "Apr", "May"), "Spring",
+                         ifelse(df_hyp2$Month %in% c("Jun", "Jul", "Aug"), "Summer", "Fall"))),
+                         levels = c("Spring", "Summer", "Fall", "Winter"))
+
+weapon_counts <- table(df_hyp2$Weapon.Desc)
+rare_weapons <- names(weapon_counts[weapon_counts < 50])  # Adjust threshold as needed
+df_hyp2$Weapon.Desc <- as.character(df_hyp2$Weapon.Desc)
+df_hyp2$Weapon.Desc[df_hyp2$Weapon.Desc %in% rare_weapons] <- "Other"
+df_hyp2$Weapon.Desc <- factor(df_hyp2$Weapon.Desc)
+
+table_season_weapon <- table(df_hyp2$Season, df_hyp2$Weapon.Desc)
+
+chisq_result <- chisq.test(table_season_weapon)
+
+chisq_result
+table_season_weapon
+```
+Results: 
+Null Hypothesis (H_0): There is no association between the season in which a crime occurs and the type of weapon used in child-involved crimes.
+Alternative Hypothesis (H_1): There is an association between the season and the type of weapon used in child-involved crimes.
+
+Since the p-value is less than 0.05, we reject the null hypothesis (H_0) and accept the alternative hypothesis (H_1), indicating a significant association between seasons and weapon types used.
+
+Conclusion:
+There exists a statistically significant association between the season and the type of weapon used in crimes involving victims under 12 years old. The type of weapon used in child-involved crimes varies by season, indicating that certain weapons are more prevalent during specific times of the year.
+
+We observe that Winter shows higher instances of physical assaults, possibly due to more indoor interactions during colder months.
+
+
+```{r}
+# Identify cells with residuals > 2 or < -2
+residuals <- chisq_result$stdres
+
+significant_cells <- which(abs(residuals) > 2, arr.ind = TRUE)
+significant_cells
+```
+```{r}
+row_names <- rownames(residuals)
+col_names <- colnames(residuals)
+
+for (i in 1:nrow(significant_cells)) {
+  row_idx <- significant_cells[i, "row"]
+  col_idx <- significant_cells[i, "col"]
+  
+  season <- row_names[row_idx]
+  weapon <- col_names[col_idx]
+  res_value <- residuals[row_idx, col_idx]
+  
+  cat(sprintf("Season: %s, Weapon: %s, Residual: %.2f\n", 
+              season, weapon, res_value))
+}
+
+```
+```{r}
+library(ggplot2)
+library(viridis) 
+
+plot <- ggplot(df_hyp2, aes(x = Season, fill = Weapon.Desc)) +
+  geom_bar(position = "dodge") +
+  labs(
+    title = "Weapon Usage Across Seasons",
+    x = "Season",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal() +
+  scale_fill_viridis_d(option = "mako") # Use mako color palette
+
+ggsave("weapon_types_by_season.png", plot = plot, width = 8, height = 6, dpi = 300)
+
+print(plot)
+
+
+```
+
+
+```{r}
+# sex comparison
+library(lubridate)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+df_hyp4 <- df
+valid_vict_sex <- !is.na(df_hyp4$Vict.Sex) & df_hyp4$Vict.Sex != ""
+df_hyp4 <- df_hyp4[valid_vict_sex, ]
+df_hyp4 <- df_hyp4[df_hyp4$Vict.Sex != "H",]
+
+df_hyp4$Vict.Sex <- factor(df_hyp4$Vict.Sex)
+
+
+df_hyp4$Vict.Sex <- droplevels(df_hyp4$Vict.Sex)
+
+```
+
+```{r}
+df_hyp4$Weapon.Desc <- as.character(df_hyp4$Weapon.Desc)  
+df_hyp4$Weapon.Desc[is.na(df_hyp4$Weapon.Desc) | df_hyp4$Weapon.Desc == ""] <- "Missing"
+
+# Combine less frequent weapon types into 'Other' (threshold < 50 occurrences)
+weapon_counts <- table(df_hyp4$Weapon.Desc)
+rare_weapons <- names(weapon_counts[weapon_counts < 50])  # Identify rare weapons
+df_hyp4$Weapon.Desc[df_hyp4$Weapon.Desc %in% rare_weapons] <- "Other"  
+
+df_hyp4$Weapon.Desc <- factor(df_hyp4$Weapon.Desc)
+
+df_hyp4$DATE.OCC <- as.POSIXct(df_hyp4$DATE.OCC, format = "%m/%d/%Y %I:%M:%S %p")
+
+df_hyp4$Month <- as.factor(format(df_hyp4$DATE.OCC, "%b"))
+
+df_hyp4$Vict.Sex <- as.character(df_hyp4$Vict.Sex)
+
+valid_vict_sex <- !is.na(df_hyp4$Vict.Sex) & df_hyp4$Vict.Sex != ""
+
+df_hyp4 <- df_hyp4[valid_vict_sex, ]
+
+df_hyp4$Vict.Sex <- factor(df_hyp4$Vict.Sex, levels = c("F", "M", "X"))
+
+table_victim_weapon <- table(df_hyp4$Vict.Sex, df_hyp4$Weapon.Desc)
+
+# performing the Chi-Squared Test
+
+chisq_result_victim_weapon <- chisq.test(table_victim_weapon)
+print(chisq_result_victim_weapon)
+print(table_victim_weapon)
+```
+
+```{r}
+# Identify cells with residuals > 2 or < -2
+residuals <- chisq_result_victim_weapon$stdres
+
+significant_cells <- which(abs(residuals) > 2, arr.ind = TRUE)
+significant_cells
+
+row_names <- rownames(residuals)
+col_names <- colnames(residuals)
+
+# Loop through significant cells and print details
+for (i in 1:nrow(significant_cells)) {
+  row_idx <- significant_cells[i, "row"]
+  col_idx <- significant_cells[i, "col"]
+  
+  season <- row_names[row_idx]
+  weapon <- col_names[col_idx]
+  res_value <- residuals[row_idx, col_idx]
+  
+  cat(sprintf("Sex: %s, Weapon: %s, Residual: %.2f\n", 
+              season, weapon, res_value))
+}
+```
+
+
+```{r}
+library(ggplot2)
+library(scales)   # For percent_format()
+library(viridis)  
+
+# stacked bar plot
+plot <- ggplot(df_hyp4, aes(x = Vict.Sex, fill = Weapon.Desc)) +
+  geom_bar(position = "fill") +  # Stacked bars scaled to 1 (proportions)
+  labs(
+    title = "Proportion of Weapon Types by Victim Sex",
+    x = "Victim Sex",
+    y = "Proportion of Incidents",
+    fill = "Weapon Description"
+  ) +
+  scale_y_continuous(labels = percent_format()) +  # Convert y-axis to percentages
+  theme_minimal() +  # Use a clean, minimal theme
+  theme(
+    plot.title = element_text(hjust = 0.5)  # Center the title
+  ) +
+  scale_fill_viridis_d(option = "mako")  # Use the mako color palette
+
+print(plot)
+
+ggsave(
+  filename = "proportion_weapon_types_by_victim_sex.png", 
+  plot = plot, 
+  width = 8, 
+  height = 6, 
+  dpi = 300
+)
+```
+
+
+
+# Hypothesis 3
+The type of crime (Crm.Cd.Desc) can be predicted by location type (Premis.Desc), time of occurrence (Time Occ), and victim demographics (Vict Age, Vict Sex, etc.).
+Test Method: Random forest & Variable selection. Encode categorical predictors to numeric representations.
+
+```{r}
+# Hypothesis 3: 
+library(randomForest)
+
+df_hyp3 <- df[, c("Crm.Cd.Desc", "Premis.Desc", "TIME.OCC", 
+                  "Vict.Age", "Vict.Sex", "Vict.Descent")]
+df_hyp3 <- na.omit(df_hyp3)
+
+# Encode categorical variables as factors
+df_hyp3$Crm.Cd.Desc <- as.factor(df_hyp3$Crm.Cd.Desc)
+df_hyp3$Premis.Desc <- as.factor(df_hyp3$Premis.Desc)
+df_hyp3$Vict.Sex <- as.factor(df_hyp3$Vict.Sex)
+df_hyp3$Vict.Descent <- as.factor(df_hyp3$Vict.Descent)
+
+# Convert 'TIME.OCC' to time categories
+df_hyp3$Time.Category <- cut(df_hyp3$TIME.OCC, breaks = c(-1, 600, 1200, 1800, 2400),
+                             labels = c("Night", "Morning", "Afternoon", "Evening"))
+df_hyp3$Time.Category <- as.factor(df_hyp3$Time.Category)
+df_hyp3$TIME.OCC <- NULL 
+
+# Combine similar crime types and group similar crimes into broader categories
+df_hyp3$Crime.Category <- as.character(df_hyp3$Crm.Cd.Desc)
+assault_crimes <- c("ASSAULT WITH DEADLY WEAPON, AGGRAVATED ASSAULT",
+                    "BATTERY - SIMPLE ASSAULT",
+                    "CHILD ABUSE (PHYSICAL) - SIMPLE ASSAULT")
+neglect_crimes <- c("CHILD NEGLECT (SEE 300 W.I.C.)",
+                    "CRM AGNST CHLD (13 OR UNDER) (14-15 & SUSP 10 YRS OLDER)")
+
+df_hyp3$Crime.Category[df_hyp3$Crime.Category %in% assault_crimes] <- "Assault"
+df_hyp3$Crime.Category[df_hyp3$Crime.Category %in% neglect_crimes] <- "Neglect/Abuse"
+
+# Remove less frequent crime types
+df_hyp3 <- df_hyp3[df_hyp3$Crime.Category %in% c("Assault", "Neglect/Abuse"), ]
+df_hyp3$Crime.Category <- as.factor(df_hyp3$Crime.Category)
+df_hyp3$Crm.Cd.Desc <- NULL
+
+# Combine less frequent levels in 'Premis.Desc'
+premis_counts <- table(df_hyp3$Premis.Desc)
+rare_premises <- names(premis_counts[premis_counts < 100])  # Adjust threshold as needed
+df_hyp3$Premis.Desc <- as.character(df_hyp3$Premis.Desc)
+df_hyp3$Premis.Desc[df_hyp3$Premis.Desc %in% rare_premises] <- "Other"
+df_hyp3$Premis.Desc <- as.factor(df_hyp3$Premis.Desc)
+
+# Show num of levels
+sapply(df_hyp3, function(x) if(is.factor(x)) nlevels(x) else NA)
+
+# test train split
+set.seed(123)
+train_indices <- sample(1:nrow(df_hyp3), size = 0.7 * nrow(df_hyp3))
+train_data <- df_hyp3[train_indices, ]
+test_data <- df_hyp3[-train_indices, ]
+
+# Fit the rf model with adjusted hyperparameters
+rf_model <- randomForest(Crime.Category ~ ., data = train_data, mtry = 2, 
+                         ntree = 300, importance = TRUE)
+predictions <- predict(rf_model, newdata = test_data)
+
+# Confusion matrix
+confusion_matrix <- table(Predicted = predictions, Actual = test_data$Crime.Category)
+confusion_matrix
+
+# Calculate accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+print(paste("Accuracy:", round(accuracy * 100, 2), "%"))
+
+```
+Result: 
+Null Hypothesis (H_0): The type of crime (assault vs. neglect/abuse) cannot be predicted by location type, time of occurrence, and victim demographics better than random chance.
+
+Alternative Hypothesis (H_1): The type of crime can be predicted by location type, time of occurrence, and victim demographics better than random chance.
+
+Conclusion:
+The model correctly classified crimes as "Assault" or "Neglect/Abuse" 66.75% of the time. Note that this accuracy is significantly higher than the baseline accuracy of 50% expected from random guessing between two classes. Because the model predicts the crime type significantly better than random chance, we reject the null hypothesis (H_0). This indicates that the type of crime can be predicted by location type, time of occurrence, and victim demographics.
+
+The results showed that even within the 1-12 year range, certain ages may be more susceptible to specific crimes. Gender and descent may play a role in susceptibility to crime type.
+
+```{r}
+# Install randomForest if it's not already installed
+if (!require(randomForest)) {
+  install.packages("randomForest")
+  library(randomForest)
+} else {
+  library(randomForest)
+}
+
+```
+
+
+```{r}
+# Variable Importance Plot using base randomForest function
+varImpPlot(rf_model, 
+           main = "Variable Importance",
+           type = 2)  # type=2 for Mean Decrease Gini
+
+# Alternatively, using ggplot2 for a more customized plot
+library(ggplot2)
+importance_df <- as.data.frame(importance(rf_model))
+importance_df$Variable <- rownames(importance_df)
+
+ggplot(importance_df, aes(x = reorder(Variable, MeanDecreaseGini), y = MeanDecreaseGini)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(title = "Variable Importance (Mean Decrease Gini)",
+       x = "Variables",
+       y = "Importance") +
+  theme_minimal()
+
+```
+
+```{r}
+# Install and load required packages
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("reshape2")) install.packages("reshape2")
+
+library(ggplot2)
+library(reshape2)
+
+# Assuming confusion_matrix is already created as in your code
+confusion_matrix <- table(Predicted = predictions, Actual = test_data$Crime.Category)
+
+# Convert the confusion matrix to a data frame
+confusion_df <- as.data.frame(confusion_matrix)
+
+# Plot heatmap
+ggplot(confusion_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "steelblue") +
+  geom_text(aes(label = Freq), color = "white", size = 4) +
+  labs(title = "Confusion Matrix Heatmap",
+       x = "Actual",
+       y = "Predicted") +
+  theme_minimal()
+
+```
+```{r}
+# Install and load required package
+if (!require("pdp")) install.packages("pdp")
+library(pdp)
+
+# Example: Partial Dependence for 'Vict.Age'
+partial_plot_age <- partial(rf_model, 
+                            pred.var = "Vict.Age", 
+                            train = train_data)
+plotPartial(partial_plot_age, main = "Partial Dependence of Vict.Age")
+
+# Example: Partial Dependence for 'Time.Category'
+partial_plot_time <- partial(rf_model, 
+                             pred.var = "Time.Category", 
+                             train = train_data)
+plotPartial(partial_plot_time, main = "Partial Dependence of Time.Category")
+
+```
+
+
